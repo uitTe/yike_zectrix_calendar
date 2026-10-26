@@ -166,6 +166,34 @@ void FillLinkInfo(int64_t began_us, CalWifiLink* link) {
     link->elapsed_ms = static_cast<int>((esp_timer_get_time() - began_us) / 1000);
 }
 
+// 写入 STA 配置，遇到 ESP_ERR_WIFI_STATE 时先把状态机拉回 idle 再重试。
+//
+// 上一轮关联还没收尾（sta state 不是 idle / connected）时，ESP-IDF 会直接拒绝
+// esp_wifi_set_config。取数重试是「关联失败 → 立即重来」的节奏，正好撞上这个窗口：
+// 2026-10-26 实测 3 轮重试只用掉 10 秒，后两轮连一帧都没发出去，全是
+// `wifi:sta is connecting, cannot set config`。这里主动 disconnect 并小步重试，
+// 让每次重试都有真正尝试的机会。
+// 参数用非 const 引用：esp_wifi_set_config 的形参本身就不带 const。
+esp_err_t ApplyStaConfig(wifi_config_t& config, uint32_t wait_ms) {
+    const int64_t deadline_us = esp_timer_get_time() + static_cast<int64_t>(wait_ms) * 1000;
+    esp_err_t err = ESP_OK;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        err = esp_wifi_set_config(WIFI_IF_STA, &config);
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        if (err != ESP_ERR_WIFI_STATE) {
+            return err;
+        }
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (esp_timer_get_time() >= deadline_us) {
+            break;
+        }
+    }
+    return err;
+}
+
 }  // namespace
 
 bool CalWifiLoad(CalWifiCredentials* out) {
@@ -285,7 +313,9 @@ bool CalWifiConnect(const CalWifiCredentials& cred, uint32_t timeout_ms,
     config.sta.pmf_cfg.capable = true;
     config.sta.pmf_cfg.required = false;
 
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &config);
+    // 写入前留 500 ms 让上一轮关联收尾；仍在 connecting 时由 ApplyStaConfig 负责
+    // disconnect 后重试，不再像原来那样一次失败就放弃整次连接。
+    esp_err_t err = ApplyStaConfig(config, 500);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "设置 STA 配置失败：%s", esp_err_to_name(err));
         return false;
@@ -326,6 +356,8 @@ bool CalWifiConnect(const CalWifiCredentials& cred, uint32_t timeout_ms,
     ESP_LOGE(kTag, "连接 %s 失败，超时 %u ms，断开原因 %d：%s", cred.ssid,
              static_cast<unsigned>(timeout_ms), g_last_disconnect_reason,
              DisconnectReasonText(g_last_disconnect_reason));
+    // 失败也主动断开：让 sta 立刻回到 idle，下次调用不必再等状态机收尾。
+    esp_wifi_disconnect();
     return false;
 }
 

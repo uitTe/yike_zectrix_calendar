@@ -1,7 +1,8 @@
 // 配网通道：USB 串口行协议与 SoftAP 网页并行运行，两条路共用同一份写入实现。
 //
 // 两块内容，可只给其中一块：
-//   WiFi —— {"wifi":{"ssid":"..","pass":".."}}，先连上再写 NVS，连不上不动已存凭据
+//   WiFi —— {"wifi":{"ssid":"..","pass":".."}}，先把凭据写进 NVS 再关联；
+//           关联失败不清凭据，下次重启按已配网继续跑（只是连不上）
 //   取数凭证 —— {"agc":{"clientId":"..","secret":"..","apiKey":"..","groupId":".."}}
 //               留空的字段保持原值
 #include "cal_net.h"
@@ -12,6 +13,7 @@
 
 #include "cJSON.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -111,7 +113,12 @@ go.onclick = async () => {
       }
       msg.textContent = text + '\n设备正在重启，可以断开热点了';
     } else {
-      msg.textContent = '保存失败：' + (data.error || '未知原因');
+      let text = '保存失败：' + (data.error || '未知原因');
+      // 凭据落盘与关联成功分开报：密码错时输入已经存住，改一下重提即可。
+      if (data.wifiSaved) {
+        text += '\nWi-Fi 凭据已保存，改好密码直接再提交一次，不用从头填写。';
+      }
+      msg.textContent = text;
       go.disabled = false;
     }
   } catch (error) {
@@ -144,6 +151,7 @@ struct ApplyResult {
     const char* stage = "";
     const char* error = "";
     bool agc_complete = false;
+    bool wifi_saved = false;      // 凭据已落盘；关联失败时它仍是 true
     bool wifi_connected = false;  // 本次真的新连了一次，才有地址与信号可报
 };
 
@@ -227,14 +235,19 @@ ApplyResult ApplyProvision(const ProvisionInput& in) {
         result.agc_complete = complete;
     }
     if (in.has_wifi) {
-        if (!CalWifiConnect(in.wifi, kConnectTimeoutMs, &g_link)) {
-            result.stage = "connect";
-            result.error = "association failed";
-            return result;
-        }
+        // 先落盘、后关联（2026-10-26 修正）。原来的顺序是关联成功才写 NVS，
+        // 后果是密码输错一次凭据就不保存，下次重启仍判定「缺 WiFi 凭据」→ 又进配网，
+        // 形成死循环；用不存在的 SSID 配网时更是永远退不出来。
+        // 关联结果只决定本次能不能报地址与信号，不该决定用户输入是否保留。
         if (CalWifiSave(in.wifi) != ESP_OK) {
             result.stage = "save";
             result.error = "wifi credential write failed";
+            return result;
+        }
+        result.wifi_saved = true;
+        if (!CalWifiConnect(in.wifi, kConnectTimeoutMs, &g_link)) {
+            result.stage = "connect";
+            result.error = "association failed";
             return result;
         }
         std::strncpy(g_connected_ssid, in.wifi.ssid, sizeof(g_connected_ssid) - 1);
@@ -258,6 +271,9 @@ void SendReply(const ApplyResult& result) {
         cJSON_AddNumberToObject(root, "rssi", g_link.rssi);
         cJSON_AddNumberToObject(root, "ms", g_link.elapsed_ms);
     }
+    // 凭据落盘与关联是否成功是两件事：密码写错了 NVS 里也已经有这份输入，
+    // PC 侧与网页要看得出这个区别，否则会误判成「什么都没保存」。
+    cJSON_AddBoolToObject(root, "wifiSaved", result.wifi_saved);
     cJSON_AddBoolToObject(root, "agcComplete", result.agc_complete);
     char* text = cJSON_PrintUnformatted(root);
     if (text != nullptr) {
@@ -311,23 +327,29 @@ esp_err_t SaveHandler(httpd_req_t* req) {
 
     const ApplyResult result = ApplyProvision(input);
     if (!result.ok) {
-        char reply[160] = {};
+        // wifiSaved 让网页区分两种失败：凭据存了但连不上（改密码即可重试），
+        // 与凭据根本没写进去（得先解决写入问题）。
+        char reply[200] = {};
         std::snprintf(reply, sizeof(reply),
-                      "{\"ok\":false,\"stage\":\"%s\",\"error\":\"%s, reason %d\"}",
-                      result.stage, result.error, CalWifiLastDisconnectReason());
+                      "{\"ok\":false,\"stage\":\"%s\",\"error\":\"%s, reason %d\",\"wifiSaved\":%s}",
+                      result.stage, result.error, CalWifiLastDisconnectReason(),
+                      result.wifi_saved ? "true" : "false");
         SendJson(req, reply);
         return ESP_OK;
     }
 
-    char reply[224] = {};
+    char reply[256] = {};
     if (result.wifi_connected) {
         std::snprintf(reply, sizeof(reply),
-                      "{\"ok\":true,\"ip\":\"%s\",\"rssi\":%d,\"ms\":%d,\"agcComplete\":%s}",
+                      "{\"ok\":true,\"ip\":\"%s\",\"rssi\":%d,\"ms\":%d,\"wifiSaved\":true,"
+                      "\"agcComplete\":%s}",
                       g_link.ip, g_link.rssi, g_link.elapsed_ms,
                       result.agc_complete ? "true" : "false");
     } else {
         // 只写了取数凭证：没有新的关联，报地址只会误导。
-        std::snprintf(reply, sizeof(reply), "{\"ok\":true,\"agcComplete\":%s}",
+        std::snprintf(reply, sizeof(reply),
+                      "{\"ok\":true,\"wifiSaved\":%s,\"agcComplete\":%s}",
+                      result.wifi_saved ? "true" : "false",
                       result.agc_complete ? "true" : "false");
     }
     SendJson(req, reply);
@@ -393,7 +415,9 @@ bool HandleLine(const char* line, CalProvisionDisplay display) {
     if (!result.ok) {
         if (display != nullptr) {
             if (std::strcmp(result.stage, "connect") == 0) {
-                display("CONNECT FAILED", "resend with correct password");
+                // 凭据已落盘，只是这次连不上：告诉用户改密码重发即可，输入没白费。
+                display("CONNECT FAILED",
+                        result.wifi_saved ? "credentials saved" : "resend with correct password");
             } else {
                 display("SAVE FAILED", result.stage);
             }
@@ -417,6 +441,19 @@ bool CalProvisionRun(uint32_t idle_timeout_ms, CalProvisionDisplay display) {
     const esp_err_t install = usb_serial_jtag_driver_install(&serial_config);
     if (install != ESP_OK && install != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(kTag, "串口驱动安装失败：%s", esp_err_to_name(install));
+    }
+    // 驱动接管 USB-Serial/JTAG 之后，默认的 stdout 通道（ROM 直接写 FIFO）就与驱动
+    // 各走一半，配网期间变成黑盒：看不见日志、也判断不出设备走到哪一步
+    // （2026-10-26 实测，三次捕获全是零字节）。把 VFS 也切到驱动上，printf 与
+    // ESP_LOG 才继续有效。
+    //
+    // 但 VFS 驱动写是 portMAX_DELAY 阻塞：没接 USB 时没有对端取数据，FIFO 一满，
+    // 第一条日志就会把配网循环永久卡住。所以只在主机已连接时切换；没连接时保持
+    // 默认通道（ROM 写 FIFO，无人接收则丢弃，不会阻塞）。
+    const bool vfs_on_driver = usb_serial_jtag_is_connected();
+    if (vfs_on_driver) {
+        usb_serial_jtag_vfs_use_driver();
+        ESP_LOGI(kTag, "串口驱动就绪，VFS 已切到驱动（从本行起日志正常输出）");
     }
 
     char ap_ssid[kCalWifiSsidMax + 1] = {};
@@ -507,5 +544,10 @@ bool CalProvisionRun(uint32_t idle_timeout_ms, CalProvisionDisplay display) {
 
     StopHttpd();
     CalWifiStopAp();
+    // 配网没成功、主流程还要继续跑：切回非阻塞写。否则 USB 一拔，下一条日志就会
+    // 卡在 portMAX_DELAY 上，把整次唤醒堵死（比黑盒更糟）。
+    if (vfs_on_driver) {
+        usb_serial_jtag_vfs_use_nonblocking();
+    }
     return false;
 }

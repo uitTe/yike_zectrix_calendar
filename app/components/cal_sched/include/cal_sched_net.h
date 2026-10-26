@@ -26,7 +26,7 @@ struct CalSchedUpdateResult {
     int rssi = 0;
     int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;  // 北京时间
     int attempts = 0;              // 实际尝试轮数，1 表示一次就成
-    CalSchedCache cache;           // 成功时为最新数据；失败时为旧缓存（可能为空）
+    CalSchedCache cache = {};      // 成功时为最新数据；失败时为旧缓存（可能为空）
 };
 
 // 一次完整的取数更新：按需连接 WiFi → 换 token → 调云函数 → 写缓存。

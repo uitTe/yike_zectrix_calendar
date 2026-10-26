@@ -1,5 +1,6 @@
 // 每日台历：本地 RTC 零点唤醒，刷新离线历法后进入 deep sleep。
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,8 +41,6 @@ constexpr char kTag[] = "calendar";
 constexpr int64_t kButtonAwakeMs = 30000;
 // 配网窗口按闲置计时：5 分钟内没有串口输入或网页请求才退出，硬上限 15 分钟。
 constexpr int64_t kProvisionIdleMs = 300000;
-// BOOT 按下不到这个时长就松开，算一次短按。
-constexpr int64_t kBootTapMs = 500;
 // RTC 与服务器时间差异不超过这个秒数就不写。RTC 每天误差约 1.7 秒，
 // 一天写一次足够，没必要每次唤醒都动一次 I2C。
 constexpr long kClockWriteThresholdSeconds = 5;
@@ -49,19 +48,34 @@ constexpr long kClockWriteThresholdSeconds = 5;
 // 两档之间留 5 秒缓冲——原来 6 秒与 3 秒只差 3 秒，按到 5 秒多就会撞进配网分支，
 // 设备重启后又停在配网页，看起来像「按 3 秒没退出」。
 constexpr int64_t kProvisionHoldMs = 8000;
+// 配网期间按住 BOOT 多久算「要退出」。松手那条路径不限时长，这条只是照顾
+// 「按住不放」的按法，两者任一命中都重启。
+constexpr int64_t kProvisionBootHoldMs = 1500;
 constexpr gpio_num_t kWakePins[] = {ZECTRIX_RTC_INT, ZECTRIX_BUTTON_OK};
 
 ZectrixCanvas g_canvas;
 zectrix_epd_handle_t g_epd = nullptr;
 // 配网窗口是否打开。上键在配网里有两条路径（3 秒退出 / 8 秒重进），
 // 判定的时间误差足以让退出失效，所以另给一条不受时长阈值影响的退出方式：
-// 配网期间短按 BOOT。
-bool g_provision_active = false;
+// 配网期间按 BOOT。
+//
+// 必须是 atomic：主任务在 EnsureProvisioned() 里写，ResetButtonTask 在自己的
+// 循环里读。普通 bool 在 -O2 下会被编译器提升成寄存器常量，按键任务永远读到
+// 初始的 false —— 表现就是「按了 BOOT 没反应」（2026-10-26 实测踩到）。
+std::atomic<bool> g_provision_active{false};
 
 // 长按 UP 重启后进配网：软件复位不清 RTC 内存，用魔数传递意图。
 // 上电复位时这块内存内容不确定，因此必须校验魔数。
 RTC_NOINIT_ATTR uint32_t g_provision_request;
 constexpr uint32_t kProvisionMagic = 0x50524F56;  // "PROV"
+
+// 配网期间按 BOOT 退出时置位，让重启后这一次跳过配网。
+//
+// 没有它的话「退出配网」是句空话：无凭据时 EnsureProvisioned() 每次启动都会进
+// 配网，按 BOOT 只是重启再进一次，屏幕永远停在 SETUP（2026-10-26 实测确认）。
+// 标志只消费一次，读到就清零，否则以后每次启动都会跳过配网。
+RTC_NOINIT_ATTR uint32_t g_skip_provision;
+constexpr uint32_t kSkipProvisionMagic = 0x534B4950;  // "SKIP"
 
 void ResetButtonTask(void*) {
     CalendarResetButton button;
@@ -92,15 +106,29 @@ void ResetButtonTask(void*) {
             esp_restart();
         }
 
-        // 配网期间短按 BOOT 退出。配网不走 WaitForUser，BOOT 在这里没有别的语义。
+        // 配网期间按 BOOT 退出。两条触发路径，覆盖实际按法：
+        //   松手即退 —— 轻点一下就退出，不判按下时长
+        //   按住 1.5 秒即退 —— 有人习惯按住不放（比如之前为了保持设备醒着），
+        //                     只等松手的话这种按法永远退不出去
+        // 退出要连带置 g_skip_provision：否则重启后因缺凭据又进配网，画面仍是
+        // SETUP，用户看到的就是「按了没反应」。
         const bool boot_level = gpio_get_level(ZECTRIX_BUTTON_OK) == 0;
         if (boot_level && !boot_down) {
             boot_down = true;
             boot_down_ms = now_ms;
+        } else if (boot_level && boot_down && g_provision_active.load() &&
+                   now_ms - boot_down_ms >= kProvisionBootHoldMs) {
+            ESP_LOGI(kTag, "BOOT held %lld ms: leave provisioning",
+                     static_cast<long long>(now_ms - boot_down_ms));
+            g_skip_provision = kSkipProvisionMagic;
+            fflush(stdout);
+            esp_restart();
         } else if (!boot_level && boot_down) {
             boot_down = false;
-            if (g_provision_active && now_ms - boot_down_ms < kBootTapMs) {
-                ESP_LOGI(kTag, "BOOT tap: leave provisioning");
+            if (g_provision_active.load()) {
+                ESP_LOGI(kTag, "BOOT released after %lld ms: leave provisioning",
+                         static_cast<long long>(now_ms - boot_down_ms));
+                g_skip_provision = kSkipProvisionMagic;
                 fflush(stdout);
                 esp_restart();
             }
@@ -439,6 +467,10 @@ void ShowProvisionScreen(const char* line1, const char* line2) {
 void EnsureProvisioned(zectrix_epd_handle_t epd) {
     const bool requested = g_provision_request == kProvisionMagic;
     g_provision_request = 0;
+    // 上次按 BOOT 退出配网留下的意图：这一次直接跳过，只跑离线历法。
+    // 手动触发进配网的优先级更高，所以 requested 时忽略它。
+    const bool skip_once = g_skip_provision == kSkipProvisionMagic;
+    g_skip_provision = 0;
     CalWifiCredentials cred;
     CalApiCredentials api;
     const bool has_wifi = CalWifiLoad(&cred);
@@ -446,8 +478,12 @@ void EnsureProvisioned(zectrix_epd_handle_t epd) {
     if (!requested && has_wifi && has_api) {
         return;
     }
+    if (skip_once && !requested) {
+        ESP_LOGW(kTag, "跳过配网（上次按 BOOT 退出时请求），本次只用离线历法");
+        return;
+    }
     g_epd = epd;
-    g_provision_active = true;
+    g_provision_active.store(true);
     if (requested) {
         ESP_LOGW(kTag, "进入配网模式（手动触发）");
     } else if (!has_wifi && !has_api) {
@@ -460,7 +496,7 @@ void EnsureProvisioned(zectrix_epd_handle_t epd) {
     if (!CalProvisionRun(kProvisionIdleMs, ShowProvisionScreen)) {
         ESP_LOGW(kTag, "配网未完成，按未配网继续运行");
     }
-    g_provision_active = false;
+    g_provision_active.store(false);
     g_epd = nullptr;
 }
 
@@ -575,7 +611,10 @@ tm RenderTodayPage(const tm& displayed, ZectrixBoard* board) {
 
     // 取数：连 WiFi → 换 token → 调云函数 → 写缓存，失败按 1 分钟 ×3 重试。
     // 凭证不全就跳过，页面照常出（班次区按「获取失败」画）。
-    CalSchedUpdateResult update;
+    // 必须值初始化：缺凭据时不进 CalSchedUpdate()，若 update.cache.count 留成栈上
+    // 垃圾值，ResolveSchedule() 会拿它当循环上界越界读，直接 panic
+    // （2026-10-26 实测：Cache disabled but cached memory region accessed / EXCVADDR 0）。
+    CalSchedUpdateResult update = {};
     CalWifiCredentials wifi_cred;
     CalApiCredentials api_cred;
     if (CalWifiLoad(&wifi_cred) && CalApiCredLoad(&api_cred)) {

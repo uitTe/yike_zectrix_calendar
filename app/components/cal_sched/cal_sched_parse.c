@@ -386,6 +386,11 @@ bool cal_sched_cache_find(const CalSchedCache* cache, int year, int month, int d
     if (cache == NULL || out == NULL) {
         return 0;
     }
+    /* count 由 unpack / clear 维护，但跳过取数的路径上 cache 可能是值初始化的空对象
+     * 之外的形态。越界读会直接 panic，这里按上界挡一道。 */
+    if (cache->count < 0 || cache->count > CAL_SCHED_MAX_DAYS) {
+        return 0;
+    }
     for (int i = 0; i < cache->count; ++i) {
         const CalSchedDay* item = &cache->days[i];
         if (item->year == year && item->month == month && item->day == day) {

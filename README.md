@@ -75,7 +75,7 @@ tools/.venv/Scripts/python.exe tools/provision.py --port COM5 --ssid MyWiFi --pa
 # 或：手机连热点 Zectrix-Cal-XXXX，浏览器打开 http://192.168.4.1 填写
 ```
 
-窗口按闲置计时，300 秒无操作退出。**想中途退出就短按 BOOT。**
+窗口按闲置计时，300 秒无操作退出。**想中途退出就按一下 BOOT**（不限按下时长）。
 
 ## 取数配置
 
