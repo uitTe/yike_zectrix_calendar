@@ -1,0 +1,12 @@
+# 文本文件在仓库内与检出时都用 LF，避免 Windows 与其他平台互相产生行尾差异
+* text=auto eol=lf
+
+# 二进制：不做行尾转换，也不做文本 diff
+*.bin binary
+*.img binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.a binary
+*.o binary
+*.obj binary

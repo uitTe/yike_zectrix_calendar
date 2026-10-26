@@ -1,0 +1,9 @@
+{
+  "clientId": "<AGC Client ID>",
+  "clientSecret": "<AGC Client Secret>",
+  "apiKey": "<中转云函数 apiKey>",
+  "groupId": "<班次分组编号>",
+  "productId": "<AGC 网关 productId>",
+  "proxyUrl": "https://connect-drcn.dbankcloud.cn/agc/apigw/wisefunction/functions/<projectId>/proxy-function-$latest",
+  "startDate": ""
+}

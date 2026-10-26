@@ -1,0 +1,74 @@
+# ---- 敏感 / 不可再生成 ----
+# 原厂 Flash 备份：刷机唯一退路，绝不入库
+backup/
+*.bin
+*.img
+
+# ---- 上游工程（官方 Demo fork）----
+# 按 README 的说明单独 clone 到 firmware/，不进本仓库。
+# 若改成 git submodule，删掉下面这条，由 .gitmodules 记录来源与版本。
+firmware/
+
+# Wi-Fi / API 凭据
+.env
+.env.*
+apikey.txt
+/tools/agc_access_token.txt
+*credentials*
+*sdkconfig.old*
+
+# ---- ESP-IDF 构建产物 ----
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/compile_commands.json
+firmware/.cache/
+
+# ---- 工具链 ----
+tools/.venv/
+tools/**/*.pyc
+tools/**/__pycache__/
+tools/.espressif/
+
+# ---- 临时日志 / 排查残留 ----
+firmware/*.log
+tools/_*.txt
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.code-workspace
+Thumbs.db
+desktop.ini
+
+# 本地构建与验证中间文件
+app/build/
+app/sdkconfig
+.tmp_*/
+
+# ---- 开源前补充（2026-10-26，见 docs/13-开源前的敏感信息清理.md）----
+# 本地凭据：真实值放这里，仓库只保留 *.example.*
+tools/agc_config.local.*
+# 会话记忆与过程草稿：含内部推理、设备指纹与凭据指纹
+.workbuddy/
+findings.md
+progress.md
+task_plan.md
+# 抓包与运行日志：含真实 SSID、内网地址、设备 MAC
+docs/logs/
+*.log
+# 合并镜像：含上游 bootloader 与分区表，改走 Release 上传
+dist/
+# 系统文件
+.DS_Store
+
+# ---- 内部过程文档（本地保留，不入库）----
+# 交接记录、排查快照、维护者自检流程：属于开发过程，对仓库读者没有用处
+docs/04-交接文档-*.md
+docs/05-交接文档-*.md
+docs/13-*.md
+docs/AGC调用记录.md
+docs/authKey.md
+docs/agc-diagnostics-*/

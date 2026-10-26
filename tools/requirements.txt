@@ -1,0 +1,17 @@
+# 项目工具脚本的运行环境（tools/ 下的 Python 脚本用）
+#
+# 只列直接依赖；版本取自 2026-10-26 实际在用的虚拟环境。
+# 安装：
+#   python -m venv tools/.venv
+#   tools/.venv/Scripts/python.exe -m pip install -r tools/requirements.txt
+
+# 烧录 / Flash 备份读写
+esptool==4.8.1
+pyserial==3.5
+
+# 字模普查与点阵渲染（字体必须是 Noto Sans SC，SIL OFL）
+pillow==12.3.0
+lunardate==0.3.0
+
+# AGC 接口探测（tools/agc_probe.py）
+requests==2.34.2

@@ -1,0 +1,20 @@
+menu "Zectrix 台历"
+
+    config CAL_AGC_PROXY_URL
+        string "AGC 中转云函数地址"
+        default "https://connect-drcn.dbankcloud.cn/agc/apigw/wisefunction/functions/example/proxy-function-$latest"
+        help
+            中转云函数的完整触发地址，形如
+            https://<域名>/agc/apigw/wisefunction/functions/<projectId>/proxy-function-$latest
+
+            仓库里只放占位地址。真实值写进本地 app/sdkconfig（该文件不入库），
+            或在 idf.py menuconfig 里填写。地址变了要重新编译并烧录。
+
+    config CAL_AGC_PRODUCT_ID
+        string "AGC 网关 productId 请求头"
+        default "example-product-id"
+        help
+            调用中转云函数时随请求头发送的 productId。它是网关的路由标识，
+            不属于密钥；真实值同样写进本地 app/sdkconfig。
+
+endmenu

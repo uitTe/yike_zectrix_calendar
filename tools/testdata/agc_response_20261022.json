@@ -1,0 +1,25 @@
+{
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "groupId": "grp_example_0000000000000",
+    "startDate": "2026-10-22",
+    "endDate": "2026-11-04",
+    "days": [
+      {"date": "2026-10-22", "shiftName": "休", "amStart": "00:00", "amEnd": "00:00", "pmStart": "00:00", "pmEnd": "00:00", "remark": ""},
+      {"date": "2026-10-23", "shiftName": "A1", "amStart": "12:30", "amEnd": "17:00", "pmStart": "18:00", "pmEnd": "21:00", "remark": ""},
+      {"date": "2026-10-24", "shiftName": "C2（验车）", "amStart": "09:00", "amEnd": "12:00", "pmStart": "13:15", "pmEnd": "18:00", "remark": ""},
+      {"date": "2026-10-25", "shiftName": "休", "amStart": "00:00", "amEnd": "00:00", "pmStart": "00:00", "pmEnd": "00:00", "remark": ""},
+      {"date": "2026-10-26", "shiftName": "B1", "amStart": "09:30", "amEnd": "13:15", "pmStart": "17:00", "pmEnd": "21:00", "remark": ""},
+      {"date": "2026-10-27", "shiftName": "休", "amStart": "00:00", "amEnd": "00:00", "pmStart": "00:00", "pmEnd": "00:00", "remark": ""},
+      {"date": "2026-10-28", "shiftName": "A2", "amStart": "09:00", "amEnd": "13:00", "pmStart": "14:15", "pmEnd": "18:00", "remark": ""},
+      {"date": "2026-10-29", "shiftName": "A2", "amStart": "09:00", "amEnd": "13:00", "pmStart": "14:15", "pmEnd": "18:00", "remark": ""},
+      {"date": "2026-10-30", "shiftName": "A2", "amStart": "09:00", "amEnd": "13:00", "pmStart": "14:15", "pmEnd": "18:00", "remark": ""},
+      {"date": "2026-10-31", "shiftName": "休", "amStart": "00:00", "amEnd": "00:00", "pmStart": "00:00", "pmEnd": "00:00", "remark": ""},
+      {"date": "2026-11-01", "remark": ""},
+      {"date": "2026-11-02", "remark": ""},
+      {"date": "2026-11-03", "remark": ""},
+      {"date": "2026-11-04", "remark": ""}
+    ]
+  }
+}
